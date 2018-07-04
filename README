@@ -1,0 +1,199 @@
+BACKTESTING TOOL FOR ALGORITHMIC DELTA-HEDGING STRATEGY IN FX OPTIONS SPACE
+
+Table of Contents:
+0. Relevant reading materials
+1. Prerequisites
+2. Compiling instructions
+3. Usage
+4. Format of conf_file
+5. Brief description of project files (c++ and Python files)
+6. Project MySQL tables
+
+0. Relevant reading materials:
+   paper1: Sorokin, Valery, Design and Back-Testing of a Systematic Delta-Hedging Strategy in FX Options Space (May 17, 2016). Available at SSRN: https://ssrn.com/abstract=2782638 or http://dx.doi.org/10.2139/ssrn.2782638
+   paper2: Sorokin, Valery, Algorithmic Approach to Delta-Hedging: Researching Realized FX Volatility at Micro Level (August 20, 2017). Available at SSRN: https://ssrn.com/abstract=3022883
+
+1. Prerequisites:
+   a. ubuntu (my current version is 14.04.5)
+   b. mysql (my current mysql version is 14.14 Distrib 5.5.55, for debian-linux-gnu (x86_64) using readline 6.3)
+   c. libmysqlcppconn (c++ connector to mysql), to install simply type: apt-get install libmysqlcppconn-dev 
+
+2. Compiling instructions:
+   g++ -std=c++11 run_test.cpp -o run_test.o -L/usr/lib -lmysqlcppconn
+
+3. Usage:
+   ./run_test.o conf_file1 conf_file2
+
+4. Format of conf_file (no blank lines before/after the text)
+
+XXXXXXXXX		#string database_name
+XXXXXXXXX		#string user_name
+XXXXXXXXX		#string password
+localhost		#string host
+usdjpy_1w_cycles	#string cycles_table
+usdjpy_new1		#string quotes_table
+usdjpy_date_mapping	#string mapping_table
+fxstraddle		#"fxstraddle" or "fxspread call 0.25 0.5" (call|put delta volspread)
+-1			#cycle start (from and including)
+-1			#cycle end (to and including)
+100 250 500 750 1000 1250 2500 5000	#int thresholds
+50			#int num cycles per 1 mysql request
+1.0010			#double linear_delta_width
+0.0001141553		#double min_ytm
+0.2			#double manual_rebalancing_delta_fraction
+10:00:00		#string start_time
+
+5. Description of the project files:
+
+ C++ files:
+
+   run_test.cpp 
+      the back-testing procedure (load and analyze conf_file, load cycles, iterate over cycles, load respective quotes from mysql and perform individual back-tests for each cycle)
+ 
+   dt.h
+      very simple dt class supporting basic datetime operations (including day of week, difference between two dates, etc.)
+
+   norm.h
+      interface to access tabulated pdf and cdf of normal distribution, inverse cdf function is also supported for a few key values
+
+   fxoptions.h
+      basic class supporting plain vanilla call and put options
+
+   fxoptionscombination.h and fxoptionscombination.hpp
+      base class for option combinations such as straddles and spread options (mostly access fuctions and price/risks calculators)
+
+   fxstraddle.h and fxspread.h
+      classes supporting straddles and spread options (mostly constructors)
+
+   portfolio.h and portfolio.hpp
+      delta-hedging algorithm and functions related to delta-hedging; the core of the algorithm
+
+   log_entry.h and log_entry.hpp
+      special class that contains results of one rebalancing act; Portfolio class has a pointer to a series of log_entries
+
+   params.h
+      functions for reading configuration file (conf_file)
+   
+   aux_classes.h and aux_classes.hpp
+      these files declare and implement the following auxiliary classes:
+         order - class that contains fx rate and notional amount of a stop order;
+         c_quote - class that contains an individual tick (datatime, two fx rates and two notional amounts);
+         c_arrayofquotes - array of c_quotes; a few specific functions allow to re-load quotes from mysql database in a smart (efficient) way;
+         c_cycle - class that contains functionality related to individual investment cycle (sale of option combination); the functions mostly do the checks and decide what delta-hedging procedures to call while actual rebalancing and calculation is done at portfolio class level (see above portfolio.h and portfolio.hpp)
+
+ Python files:
+   
+   01.dukascopy.unpack_and_save_data.py
+      unpack (from a zip archive) and save (load to mysql) ticks data; also see (eurusd|gbpusd|usdjpy)_new1 table format
+
+   02.create_date_rowid_mapping.py
+      create date-rowid mapping table (for each tick quote there is a unique rowid which is also a primary key in the relevant mysql table that contains all ticks); also see (eurusd|usdjpy|gbpusd)_date_mapping table format
+
+   03.generate_cycles.py
+      generate cycles (one cycle corresponds to one sale of an option combination) that will be back-tested by the algorithm; also see (eurusd|gbpusd|usdjpy)_(1m|1w)_cycles table format
+
+   04.fill_cycles_table.py
+      load volatility bid and forward points for each cycle; also see (eurusd|gbpusd|usdjpy)_(1m|1w)_cycles table format
+
+   05a.load_rebalancing_data_hdf5.py
+      loads rebalancing data from txt reports to a centralized hdf5 file; roughly speaking, one conf_file corresponds to one hdf5 file
+
+   06a.load_daily_series_hdf5.py 
+      creates daily pnl series for each set of strategies (for example, sale of EURUSD weekly straddles on Fridays)
+
+   07.vol_analysis.py; 08.vol_analysis.py; 09.visualize_spreads_results.py
+      ad hoc analysis & visualization of results
+   
+5. MySQL Tables:
+
+   project tables:
+
+	+----------------------------+
+	| eurusd_1m_cycles           |
+	| eurusd_1w_cycles           |
+	| eurusd_date_mapping        |
+	| eurusd_new1                |
+	| gbpusd_1m_cycles           |
+	| gbpusd_1w_cycles           |
+	| gbpusd_date_mapping        |
+	| gbpusd_new1                |
+	| usdjpy_1m_cycles           |
+	| usdjpy_1w_cycles           |
+	| usdjpy_date_mapping        |
+	| usdjpy_new1                |
+	+----------------------------+
+
+   (eurusd|gbpusd)_(1m|1w)_cycles table:
+
+	+---------------+---------------------+------+-----+---------+-------+
+	| Field         | Type                | Null | Key | Default | Extra |
+	+---------------+---------------------+------+-----+---------+-------+
+	| cycle_id      | int(11)             | NO   | PRI | 0       |       |
+	| cycle_start   | date                | YES  |     | NULL    |       |
+	| cycle_end     | date                | YES  |     | NULL    |       |
+	| cycle_days    | int(11)             | YES  |     | NULL    |       |
+	| starting_spot | float(6,5) unsigned | YES  |     | NULL    |       |
+	| strike        | float(6,5) unsigned | YES  |     | NULL    |       |
+	| vol_bid       | float(7,4) unsigned | YES  |     | NULL    |       |
+	| fwd_pts       | float               | YES  |     | NULL    |       |
+	+---------------+---------------------+------+-----+---------+-------+
+
+   usdjpy_(1m|1w)_cycles table:
+
+	+---------------+---------------------+------+-----+---------+-------+
+	| Field         | Type                | Null | Key | Default | Extra |
+	+---------------+---------------------+------+-----+---------+-------+
+	| cycle_id      | int(11)             | NO   | PRI | 0       |       |
+	| cycle_start   | date                | YES  |     | NULL    |       |
+	| cycle_end     | date                | YES  |     | NULL    |       |
+	| cycle_days    | int(11)             | YES  |     | NULL    |       |
+	| starting_spot | float(8,5) unsigned | YES  |     | NULL    |       |
+	| strike        | float(8,5) unsigned | YES  |     | NULL    |       |
+	| vol_bid       | float(7,4) unsigned | YES  |     | NULL    |       |
+	| fwd_pts       | float               | YES  |     | NULL    |       |
+	+---------------+---------------------+------+-----+---------+-------+
+
+   (eurusd|gbpusd)_new1 table:
+
+	+---------------+---------------------+------+-----+---------+----------------+
+	| Field         | Type                | Null | Key | Default | Extra          |
+	+---------------+---------------------+------+-----+---------+----------------+
+	| rowid         | bigint(20) unsigned | NO   | PRI | NULL    | auto_increment |
+	| quotedate     | date                | YES  |     | NULL    |                |
+	| quotetime     | time                | YES  |     | NULL    |                |
+	| quotems       | float(4,3)          | YES  |     | NULL    |                |
+	| quotebid      | float(7,5)          | YES  |     | NULL    |                |
+	| quoteoffer    | float(7,5)          | YES  |     | NULL    |                |
+	| utc_quotedate | date                | YES  |     | NULL    |                |
+	| utc_quotetime | time                | YES  |     | NULL    |                |
+	| bidvolume     | float(6,3)          | YES  |     | NULL    |                |
+	| offervolume   | float(6,3)          | YES  |     | NULL    |                |
+	+---------------+---------------------+------+-----+---------+----------------+
+
+   usdjpy_new1 table:
+
+	+---------------+---------------------+------+-----+---------+----------------+
+	| Field         | Type                | Null | Key | Default | Extra          |
+	+---------------+---------------------+------+-----+---------+----------------+
+	| rowid         | bigint(20) unsigned | NO   | PRI | NULL    | auto_increment |
+	| quotedate     | date                | YES  |     | NULL    |                |
+	| quotetime     | time                | YES  |     | NULL    |                |
+	| quotems       | float(4,3)          | YES  |     | NULL    |                |
+	| quotebid      | float(8,5)          | YES  |     | NULL    |                |
+	| quoteoffer    | float(8,5)          | YES  |     | NULL    |                |
+	| utc_quotedate | date                | YES  |     | NULL    |                |
+	| utc_quotetime | time                | YES  |     | NULL    |                |
+	| bidvolume     | float(6,3)          | YES  |     | NULL    |                |
+	| offervolume   | float(6,3)          | YES  |     | NULL    |                |
+	+---------------+---------------------+------+-----+---------+----------------+
+   
+   (eurusd|usdjpy|gbpusd)_date_mapping table:
+
+	+------------+---------+------+-----+------------+-------+
+	| Field      | Type    | Null | Key | Default    | Extra |
+	+------------+---------+------+-----+------------+-------+
+	| m_date     | date    | NO   | PRI | 0000-00-00 |       |
+	| m_minrowid | int(11) | NO   |     | NULL       |       |
+	| m_maxrowid | int(11) | NO   |     | NULL       |       |
+	+------------+---------+------+-----+------------+-------+
+
